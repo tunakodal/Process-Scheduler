@@ -1,4 +1,4 @@
-#include <process_scheduler.h>
+#include "process_scheduler.h"
 
 int clock_time = 0;
 int stop_flag = 0;
@@ -12,7 +12,13 @@ Process *wait_queue[MAX_PROCESS_NUM];
 int wait_to_ready_size = 0;
 Process *wait_to_ready[MAX_PROCESS_NUM]; // Temporary queue for processes moving from wait to ready
 
+int process_count = 0;
+Process all_processes[MAX_PROCESS_NUM];
+
 Process *running_process = NULL;
+
+pthread_mutex_t scheduler_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t scheduler_cond = PTHREAD_COND_INITIALIZER;
 
 // Comparison function to sort processes by arrival time
 int compare_by_arrival_time(const void *a, const void *b) {
@@ -29,18 +35,18 @@ void ready_enqueue(Process *process) {
 
 // Removing from ready queue based on priority and remaining CPU time
 Process* ready_dequeue() {
-    int MIN_PRIORITY = -1;
-    for (int i = 0; i < ready_queue_size - 1; i++) {
+    int MIN_PRIORITY = 11;
+    for (int i = 0; i < ready_queue_size; i++) {
         if (ready_queue[i]->priority < MIN_PRIORITY)
         {
             MIN_PRIORITY = ready_queue[i]->priority;
         }
     }
 
-    int MIN_REMAINING_TIME = -1;
+    int MIN_REMAINING_TIME = 1000000;
     Process* selected_process = NULL;
     int seleceted_index = -1;
-    for (int i = 0; i < ready_queue_size - 1; i++) {
+    for (int i = 0; i < ready_queue_size; i++) {
         if (ready_queue[i]->priority == MIN_PRIORITY)
         {
             if (ready_queue[i]->cpu_execution_time < MIN_REMAINING_TIME)
@@ -65,16 +71,18 @@ void wait_enqueue(Process *process) {
 
 // Removing from wait queue when I/O is complete
 void wait_dequeue() {
+    int null_count = 0;
     for (int i = 0; i < wait_queue_size; i++) {
         if (wait_queue[i]->io_finish_time == clock_time)
         {
             wait_queue[i]->io_finish_time = -1; 
             wait_to_ready_enqueue(wait_queue[i]);
             wait_queue[i] = NULL;
-            wait_queue_size--;
+            null_count++;
         }
     }
     null_deletor(wait_queue);
+    wait_queue_size -= null_count;
 } 
 
 // Helper function to remove NULL entries from a queue -- based on the "dequeue" techniques of the methods above
@@ -105,6 +113,38 @@ void wait_to_ready_dequeue() {
     wait_to_ready_size = 0;
 }
     
+// Function to get processes that have arrived at the current clock time
+void get_processes() {
+    for (int i = 0; i < process_count; i++) {
+        if (all_processes[i].arrival_time == clock_time) {
+            ready_enqueue(&all_processes[i]);
+        }
+    }
+}
+
+void aging_operation() {
+    for (int i = 0; i < ready_queue_size; i++) {
+        if ((clock_time - ready_queue[i]->aging_counter) >= AGING_LIMIT) {
+            if (ready_queue[i]->priority != 0)
+            {
+                ready_queue[i]->priority--;
+            }
+            ready_queue[i]->aging_counter = clock_time; 
+        }
+    }
+}
+
+void* io_thread(void* arg){
+    pthread_mutex_lock(&scheduler_mutex);
+    while (!stop_flag) {
+        pthread_cond_wait(&scheduler_cond, &scheduler_mutex);
+        wait_dequeue();
+        wait_to_ready_dequeue();
+    }
+    pthread_mutex_unlock(&scheduler_mutex);
+
+}
+
 
 int main(int argc, char *argv[]) {
     if (argc != 2) 
@@ -120,8 +160,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    int process_count = 0;
-    Process all_processes[MAX_PROCESS_NUM];
     for (size_t i = 0; i < MAX_PROCESS_NUM; i++)
     {
         if (fscanf(input_file, "%d %d %d %d %d %d",
@@ -130,10 +168,11 @@ int main(int argc, char *argv[]) {
                    &all_processes[i].cpu_execution_time,
                    &all_processes[i].interval_time,
                    &all_processes[i].io_time,
-                   &all_processes[i].priority))
+                   &all_processes[i].priority) == 6)
         {
             all_processes[i].aging_counter = 0; // Going to be changed as soon as the process enters the ready queue
             all_processes[i].io_finish_time = -1; // -1 indicates that the process is not currently performing I/O
+            all_processes[i].cpu_entered_time = -1; // -1 indicates that the process has not yet entered the CPU
             process_count++;
         }
         else
@@ -152,10 +191,49 @@ int main(int argc, char *argv[]) {
 
     // Sort processes by arrival time
     qsort(all_processes, process_count, sizeof(Process), compare_by_arrival_time);
+
+    pthread_t io_thread_id;
+    pthread_create(&io_thread_id, NULL, io_thread, NULL);
+
+    // Main scheduling loop 
+    int all_processes_completed = 0;
+    while (all_processes_completed < process_count) {
+        pthread_mutex_lock(&scheduler_mutex);
+        clock_time++;
+
+        get_processes();
+        aging_operation();
+
+        if (running_process == NULL && ready_queue_size > 0) {
+            running_process = ready_dequeue();
+            running_process->cpu_entered_time = clock_time;
+        } 
+        else if (running_process != NULL)
+        {
+            running_process->cpu_execution_time--;
+            if (running_process->cpu_execution_time == 0)
+            {
+                running_process = NULL;
+                all_processes_completed++;
+            }
+            else if (clock_time - running_process->cpu_entered_time >= running_process->interval_time)
+            {
+                wait_enqueue(running_process);
+                running_process = NULL;
+            }
+            
+        }
+        pthread_cond_broadcast(&scheduler_cond);
+        pthread_mutex_unlock(&scheduler_mutex);    
+        usleep(1000);
+    }    
     
-
-
-        
+    pthread_mutex_lock(&scheduler_mutex);
+    stop_flag = 1;
+    pthread_cond_broadcast(&scheduler_cond);
+    pthread_mutex_unlock(&scheduler_mutex);
+    pthread_join(io_thread_id, NULL);
+    return 0;
     
 }
     
