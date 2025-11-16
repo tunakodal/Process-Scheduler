@@ -260,6 +260,7 @@ int main(int argc, char *argv[]) {
     pthread_cond_broadcast(&scheduler_cond);
     pthread_mutex_unlock(&scheduler_mutex);
 
+    // Wait for I/O thread to finish
     pthread_join(io_thread_id, NULL);
     return 0;
     
