@@ -29,6 +29,7 @@ int compare_by_arrival_time(const void *a, const void *b) {
 
 // Adding to ready queue
 void ready_enqueue(Process *process) {
+    printf("[Clock: %d] PID %d moved to READY queue\n", clock_time, process->pid);
     process->aging_counter = clock_time;
     ready_queue[ready_queue_size++] = process;
 }
@@ -60,11 +61,23 @@ Process* ready_dequeue() {
     ready_queue[seleceted_index] = NULL;
     ready_queue_size--;
     null_deletor(ready_queue);
+
+    if (selected_process)
+        printf("[Clock: %d] Scheduler dispatched PID %d (Pr: %d, Rm: %d) for %d ms burst\n",
+               clock_time,
+               selected_process->pid,
+               selected_process->priority,
+               selected_process->cpu_execution_time,
+               selected_process->interval_time);
+
     return selected_process;
 } 
 
 // Adding to wait queue
 void wait_enqueue(Process *process) {
+    printf("[Clock: %d] PID %d blocked for I/O for %d ms\n",
+           clock_time, process->pid, process->io_time);
+    
     process->io_finish_time = clock_time + process->io_time;
     wait_queue[wait_queue_size++] = process;
 }
@@ -75,6 +88,8 @@ void wait_dequeue() {
     for (int i = 0; i < wait_queue_size; i++) {
         if (wait_queue[i]->io_finish_time == clock_time)
         {
+            printf("[Clock: %d] PID %d finished I/O\n", clock_time, wait_queue[i]->pid);
+
             wait_queue[i]->io_finish_time = -1; 
             wait_to_ready_enqueue(wait_queue[i]);
             wait_queue[i] = NULL;
@@ -117,6 +132,8 @@ void wait_to_ready_dequeue() {
 void get_processes() {
     for (int i = 0; i < process_count; i++) {
         if (all_processes[i].arrival_time == clock_time) {
+            printf("[Clock: %d] PID %d arrived\n",
+                   clock_time, all_processes[i].pid);
             ready_enqueue(&all_processes[i]);
         }
     }
@@ -199,30 +216,35 @@ int main(int argc, char *argv[]) {
     int all_processes_completed = 0;
     while (all_processes_completed < process_count) {
         pthread_mutex_lock(&scheduler_mutex);
-        clock_time++;
 
         get_processes();
         aging_operation();
 
-        if (running_process == NULL && ready_queue_size > 0) {
-            running_process = ready_dequeue();
-            running_process->cpu_entered_time = clock_time;
-        } 
-        else if (running_process != NULL)
+        if (running_process != NULL)
         {
             running_process->cpu_execution_time--;
             if (running_process->cpu_execution_time == 0)
             {
+                printf("[Clock: %d] PID %d TERMINATED\n",
+                       clock_time, running_process->pid);
+                
                 running_process = NULL;
                 all_processes_completed++;
-            }
-            else if (clock_time - running_process->cpu_entered_time >= running_process->interval_time)
+            }else if (clock_time - running_process->cpu_entered_time >= running_process->interval_time)
             {
                 wait_enqueue(running_process);
                 running_process = NULL;
             }
             
         }
+
+        if (running_process == NULL && ready_queue_size > 0) {
+            running_process = ready_dequeue();
+            running_process->cpu_entered_time = clock_time;
+        } 
+
+        clock_time++;
+
         pthread_cond_broadcast(&scheduler_cond);
         pthread_mutex_unlock(&scheduler_mutex);    
         usleep(1000);
@@ -232,6 +254,7 @@ int main(int argc, char *argv[]) {
     stop_flag = 1;
     pthread_cond_broadcast(&scheduler_cond);
     pthread_mutex_unlock(&scheduler_mutex);
+
     pthread_join(io_thread_id, NULL);
     return 0;
     
