@@ -139,6 +139,7 @@ void get_processes() {
     }
 }
 
+// Aging operation to prevent starvation
 void aging_operation() {
     for (int i = 0; i < ready_queue_size; i++) {
         if ((clock_time - ready_queue[i]->aging_counter) >= AGING_LIMIT) {
@@ -188,8 +189,8 @@ int main(int argc, char *argv[]) {
                    &all_processes[i].priority) == 6)
         {
             all_processes[i].aging_counter = 0; // Going to be changed as soon as the process enters the ready queue
-            all_processes[i].io_finish_time = -1; // -1 indicates that the process is not currently performing I/O
-            all_processes[i].cpu_entered_time = -1; // -1 indicates that the process has not yet entered the CPU
+            all_processes[i].io_finish_time = -1;
+            all_processes[i].cpu_entered_time = -1;
             process_count++;
         }
         else
@@ -217,9 +218,12 @@ int main(int argc, char *argv[]) {
     while (all_processes_completed < process_count) {
         pthread_mutex_lock(&scheduler_mutex);
 
+        // Check for newly arrived processes
         get_processes();
+        // Perform aging operation
         aging_operation();
 
+        // Execute the running process
         if (running_process != NULL)
         {
             running_process->cpu_execution_time--;
@@ -238,6 +242,7 @@ int main(int argc, char *argv[]) {
             
         }
 
+        // If no process is running, dispatch the next one from the ready queue
         if (running_process == NULL && ready_queue_size > 0) {
             running_process = ready_dequeue();
             running_process->cpu_entered_time = clock_time;
@@ -247,7 +252,7 @@ int main(int argc, char *argv[]) {
 
         pthread_cond_broadcast(&scheduler_cond);
         pthread_mutex_unlock(&scheduler_mutex);    
-        usleep(1000);
+        usleep(1000); // Simulate time passage -- 1 ms per clock tick
     }    
     
     pthread_mutex_lock(&scheduler_mutex);
